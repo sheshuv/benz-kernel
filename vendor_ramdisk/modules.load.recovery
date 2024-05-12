@@ -423,12 +423,8 @@ oplus_game_first.ko
 oplus_dns_hook.ko
 oplus_bsp_memleak_detect.ko
 oplus_secure_common.ko
-hdcp_qseecom_dlkm.ko
-smcinvoke_dlkm.ko
 msm_drm.ko
 msm_ext_display.ko
 sync_fence.ko
 msm_hw_fence.ko
 msm-mmrm.ko
-hdcp_qseecom_dlkm.ko
-smcinvoke_dlkm.ko

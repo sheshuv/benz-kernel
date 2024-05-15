@@ -1,134 +1,104 @@
-// SPDX-License-Identifier: GPL-2.0
-/* User-mappable watch queue
- *
- * Copyright (C) 2020 Red Hat, Inc. All Rights Reserved.
- * Written by David Howells (dhowells@redhat.com)
- *
- * See Documentation/watch_queue.rst
- */
-
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 #ifndef _LINUX_WATCH_QUEUE_H
 #define _LINUX_WATCH_QUEUE_H
 
-#include <uapi/linux/watch_queue.h>
-#include <linux/kref.h>
-#include <linux/rcupdate.h>
+#include <linux/types.h>
+#include <linux/fcntl.h>
+#include <linux/ioctl.h>
 
-#ifdef CONFIG_WATCH_QUEUE
+#define O_NOTIFICATION_PIPE	O_EXCL	/* Parameter to pipe2() selecting notification pipe */
 
-struct cred;
+#define IOC_WATCH_QUEUE_SET_SIZE	_IO('W', 0x60)	/* Set the size in pages */
+#define IOC_WATCH_QUEUE_SET_FILTER	_IO('W', 0x61)	/* Set the filter */
 
-struct watch_type_filter {
-	enum watch_notification_type type;
-	__u32		subtype_filter[1];	/* Bitmask of subtypes to filter on */
-	__u32		info_filter;		/* Filter on watch_notification::info */
-	__u32		info_mask;		/* Mask of relevant bits in info_filter */
+enum watch_notification_type {
+	WATCH_TYPE_META		= 0,	/* Special record */
+	WATCH_TYPE_KEY_NOTIFY	= 1,	/* Key change event notification */
+	WATCH_TYPE__NR		= 2
 };
 
-struct watch_filter {
-	union {
-		struct rcu_head	rcu;
-		/* Bitmask of accepted types */
-		DECLARE_BITMAP(type_filter, WATCH_TYPE__NR);
-	};
-	u32			nr_filters;	/* Number of filters */
-	struct watch_type_filter filters[];
-};
-
-struct watch_queue {
-	struct rcu_head		rcu;
-	struct watch_filter __rcu *filter;
-	struct pipe_inode_info	*pipe;		/* The pipe we're using as a buffer */
-	struct hlist_head	watches;	/* Contributory watches */
-	struct page		**notes;	/* Preallocated notifications */
-	unsigned long		*notes_bitmap;	/* Allocation bitmap for notes */
-	struct kref		usage;		/* Object usage count */
-	spinlock_t		lock;
-	unsigned int		nr_notes;	/* Number of notes */
-	unsigned int		nr_pages;	/* Number of pages in notes[] */
-	bool			defunct;	/* T when queues closed */
+enum watch_meta_notification_subtype {
+	WATCH_META_REMOVAL_NOTIFICATION	= 0,	/* Watched object was removed */
+	WATCH_META_LOSS_NOTIFICATION	= 1,	/* Data loss occurred */
 };
 
 /*
- * Representation of a watch on an object.
+ * Notification record header.  This is aligned to 64-bits so that subclasses
+ * can contain __u64 fields.
  */
-struct watch {
-	union {
-		struct rcu_head	rcu;
-		u32		info_id;	/* ID to be OR'd in to info field */
-	};
-	struct watch_queue __rcu *queue;	/* Queue to post events to */
-	struct hlist_node	queue_node;	/* Link in queue->watches */
-	struct watch_list __rcu	*watch_list;
-	struct hlist_node	list_node;	/* Link in watch_list->watchers */
-	const struct cred	*cred;		/* Creds of the owner of the watch */
-	void			*private;	/* Private data for the watched object */
-	u64			id;		/* Internal identifier */
-	struct kref		usage;		/* Object usage count */
+struct watch_notification {
+	__u32			type:24;	/* enum watch_notification_type */
+	__u32			subtype:8;	/* Type-specific subtype (filterable) */
+	__u32			info;
+#define WATCH_INFO_LENGTH	0x0000007f	/* Length of record */
+#define WATCH_INFO_LENGTH__SHIFT 0
+#define WATCH_INFO_ID		0x0000ff00	/* ID of watchpoint */
+#define WATCH_INFO_ID__SHIFT	8
+#define WATCH_INFO_TYPE_INFO	0xffff0000	/* Type-specific info */
+#define WATCH_INFO_TYPE_INFO__SHIFT 16
+#define WATCH_INFO_FLAG_0	0x00010000	/* Type-specific info, flag bit 0 */
+#define WATCH_INFO_FLAG_1	0x00020000	/* ... */
+#define WATCH_INFO_FLAG_2	0x00040000
+#define WATCH_INFO_FLAG_3	0x00080000
+#define WATCH_INFO_FLAG_4	0x00100000
+#define WATCH_INFO_FLAG_5	0x00200000
+#define WATCH_INFO_FLAG_6	0x00400000
+#define WATCH_INFO_FLAG_7	0x00800000
 };
 
 /*
- * List of watches on an object.
+ * Notification filtering rules (IOC_WATCH_QUEUE_SET_FILTER).
  */
-struct watch_list {
-	struct rcu_head		rcu;
-	struct hlist_head	watchers;
-	void (*release_watch)(struct watch *);
-	spinlock_t		lock;
+struct watch_notification_type_filter {
+	__u32	type;			/* Type to apply filter to */
+	__u32	info_filter;		/* Filter on watch_notification::info */
+	__u32	info_mask;		/* Mask of relevant bits in info_filter */
+	__u32	subtype_filter[8];	/* Bitmask of subtypes to filter on */
 };
 
-extern void __post_watch_notification(struct watch_list *,
-				      struct watch_notification *,
-				      const struct cred *,
-				      u64);
-extern struct watch_queue *get_watch_queue(int);
-extern void put_watch_queue(struct watch_queue *);
-extern void init_watch(struct watch *, struct watch_queue *);
-extern int add_watch_to_object(struct watch *, struct watch_list *);
-extern int remove_watch_from_object(struct watch_list *, struct watch_queue *, u64, bool);
-extern long watch_queue_set_size(struct pipe_inode_info *, unsigned int);
-extern long watch_queue_set_filter(struct pipe_inode_info *,
-				   struct watch_notification_filter __user *);
-extern int watch_queue_init(struct pipe_inode_info *);
-extern void watch_queue_clear(struct watch_queue *);
+struct watch_notification_filter {
+	__u32	nr_filters;		/* Number of filters */
+	__u32	__reserved;		/* Must be 0 */
+	struct watch_notification_type_filter filters[];
+};
 
-static inline void init_watch_list(struct watch_list *wlist,
-				   void (*release_watch)(struct watch *))
-{
-	INIT_HLIST_HEAD(&wlist->watchers);
-	spin_lock_init(&wlist->lock);
-	wlist->release_watch = release_watch;
-}
 
-static inline void post_watch_notification(struct watch_list *wlist,
-					   struct watch_notification *n,
-					   const struct cred *cred,
-					   u64 id)
-{
-	if (unlikely(wlist))
-		__post_watch_notification(wlist, n, cred, id);
-}
-
-static inline void remove_watch_list(struct watch_list *wlist, u64 id)
-{
-	if (wlist) {
-		remove_watch_from_object(wlist, NULL, id, true);
-		kfree_rcu(wlist, rcu);
-	}
-}
-
-/**
- * watch_sizeof - Calculate the information part of the size of a watch record,
- * given the structure size.
+/*
+ * Extended watch removal notification.  This is used optionally if the type
+ * wants to indicate an identifier for the object being watched, if there is
+ * such.  This can be distinguished by the length.
+ *
+ * type -> WATCH_TYPE_META
+ * subtype -> WATCH_META_REMOVAL_NOTIFICATION
  */
-#define watch_sizeof(STRUCT) (sizeof(STRUCT) << WATCH_INFO_LENGTH__SHIFT)
+struct watch_notification_removal {
+	struct watch_notification watch;
+	__u64	id;		/* Type-dependent identifier */
+};
 
-#else
-static inline int watch_queue_init(struct pipe_inode_info *pipe)
-{
-	return -ENOPKG;
-}
+/*
+ * Type of key/keyring change notification.
+ */
+enum key_notification_subtype {
+	NOTIFY_KEY_INSTANTIATED	= 0, /* Key was instantiated (aux is error code) */
+	NOTIFY_KEY_UPDATED	= 1, /* Key was updated */
+	NOTIFY_KEY_LINKED	= 2, /* Key (aux) was added to watched keyring */
+	NOTIFY_KEY_UNLINKED	= 3, /* Key (aux) was removed from watched keyring */
+	NOTIFY_KEY_CLEARED	= 4, /* Keyring was cleared */
+	NOTIFY_KEY_REVOKED	= 5, /* Key was revoked */
+	NOTIFY_KEY_INVALIDATED	= 6, /* Key was invalidated */
+	NOTIFY_KEY_SETATTR	= 7, /* Key's attributes got changed */
+};
 
-#endif
+/*
+ * Key/keyring notification record.
+ * - watch.type = WATCH_TYPE_KEY_NOTIFY
+ * - watch.subtype = enum key_notification_type
+ */
+struct key_notification {
+	struct watch_notification watch;
+	__u32	key_id;		/* The key/keyring affected */
+	__u32	aux;		/* Per-type auxiliary data */
+};
 
 #endif /* _LINUX_WATCH_QUEUE_H */

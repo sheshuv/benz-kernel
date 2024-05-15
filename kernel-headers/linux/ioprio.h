@@ -1,78 +1,52 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-#ifndef IOPRIO_H
-#define IOPRIO_H
-
-#include <linux/sched.h>
-#include <linux/sched/rt.h>
-#include <linux/iocontext.h>
-
-#include <uapi/linux/ioprio.h>
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
+#ifndef _LINUX_IOPRIO_H
+#define _LINUX_IOPRIO_H
 
 /*
- * Default IO priority.
+ * Gives us 8 prio classes with 13-bits of data for each class
  */
-#define IOPRIO_DEFAULT	IOPRIO_PRIO_VALUE(IOPRIO_CLASS_NONE, 0)
+#define IOPRIO_CLASS_SHIFT	13
+#define IOPRIO_CLASS_MASK	0x07
+#define IOPRIO_PRIO_MASK	((1UL << IOPRIO_CLASS_SHIFT) - 1)
+
+#define IOPRIO_PRIO_CLASS(ioprio)	\
+	(((ioprio) >> IOPRIO_CLASS_SHIFT) & IOPRIO_CLASS_MASK)
+#define IOPRIO_PRIO_DATA(ioprio)	((ioprio) & IOPRIO_PRIO_MASK)
+#define IOPRIO_PRIO_VALUE(class, data)	\
+	((((class) & IOPRIO_CLASS_MASK) << IOPRIO_CLASS_SHIFT) | \
+	 ((data) & IOPRIO_PRIO_MASK))
 
 /*
- * Check that a priority value has a valid class.
+ * These are the io priority groups as implemented by the BFQ and mq-deadline
+ * schedulers. RT is the realtime class, it always gets premium service. For
+ * ATA disks supporting NCQ IO priority, RT class IOs will be processed using
+ * high priority NCQ commands. BE is the best-effort scheduling class, the
+ * default for any process. IDLE is the idle scheduling class, it is only
+ * served when no one else is using the disk.
  */
-static inline bool ioprio_valid(unsigned short ioprio)
-{
-	unsigned short class = IOPRIO_PRIO_CLASS(ioprio);
-
-	return class > IOPRIO_CLASS_NONE && class <= IOPRIO_CLASS_IDLE;
-}
+enum {
+	IOPRIO_CLASS_NONE,
+	IOPRIO_CLASS_RT,
+	IOPRIO_CLASS_BE,
+	IOPRIO_CLASS_IDLE,
+};
 
 /*
- * if process has set io priority explicitly, use that. if not, convert
- * the cpu scheduler nice value to an io priority
+ * The RT and BE priority classes both support up to 8 priority levels.
  */
-static inline int task_nice_ioprio(struct task_struct *task)
-{
-	return (task_nice(task) + 20) / 5;
-}
+#define IOPRIO_NR_LEVELS	8
+#define IOPRIO_BE_NR		IOPRIO_NR_LEVELS
+
+enum {
+	IOPRIO_WHO_PROCESS = 1,
+	IOPRIO_WHO_PGRP,
+	IOPRIO_WHO_USER,
+};
 
 /*
- * This is for the case where the task hasn't asked for a specific IO class.
- * Check for idle and rt task process, and return appropriate IO class.
+ * Fallback BE priority level.
  */
-static inline int task_nice_ioclass(struct task_struct *task)
-{
-	if (task->policy == SCHED_IDLE)
-		return IOPRIO_CLASS_IDLE;
-	else if (task_is_realtime(task))
-		return IOPRIO_CLASS_RT;
-	else
-		return IOPRIO_CLASS_BE;
-}
+#define IOPRIO_NORM	4
+#define IOPRIO_BE_NORM	IOPRIO_NORM
 
-/*
- * If the calling process has set an I/O priority, use that. Otherwise, return
- * the default I/O priority.
- */
-static inline int get_current_ioprio(void)
-{
-	struct io_context *ioc = current->io_context;
-
-	if (ioc)
-		return ioc->ioprio;
-	return IOPRIO_DEFAULT;
-}
-
-/*
- * For inheritance, return the highest of the two given priorities
- */
-extern int ioprio_best(unsigned short aprio, unsigned short bprio);
-
-extern int set_task_ioprio(struct task_struct *task, int ioprio);
-
-#ifdef CONFIG_BLOCK
-extern int ioprio_check_cap(int ioprio);
-#else
-static inline int ioprio_check_cap(int ioprio)
-{
-	return -ENOTBLK;
-}
-#endif /* CONFIG_BLOCK */
-
-#endif
+#endif /* _LINUX_IOPRIO_H */
